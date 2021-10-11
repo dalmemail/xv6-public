@@ -33,25 +33,107 @@ static struct spinlock mouse_device_file_lock;
 int mouse_read(struct inode *ip, char *dst, int n);
 int mouse_write(struct inode *ip, char *buf, int n);
 
+// We wait for ACKNOWLEDGED, with a timeout
+// returns 0 on success, -1 if timeout was reached
+static int _wait_for_ACK()
+{
+	int i = 0;
+
+	// while we can't read data from 0x60, or data from 0x60 is
+	// not ACK
+	while (!(inb(0x64) & DATA_IN_BUFFER) || (inb(0x60) != ACK)) {
+		i++;
+		if (i == 100000)
+			return -1;
+	}
+
+	return 0;
+}
+
+// wait for the input buffer to be available to write on it
+static int _wait_for_output_buffer()
+{
+	int i = 0;
+
+	// while we can't write to the input buffer..
+	while (inb(0x64) & 2) {
+		i++;
+		if (i == 100000)
+			return -1;
+	}
+
+	return 0;
+}
+
+// wait until the controller has data for us
+static int _wait_for_data()
+{
+	int i = 0;
+
+	// while we can't read data from 0x60, or data from 0x60 is
+	// not ACK
+	while (!(inb(0x64) & DATA_IN_BUFFER)) {
+		i++;
+		if (i == 100000)
+			return -1;
+	}
+
+	return 0;
+}
+
 void
 mouseinit(void)
 {
-	// disable scanning
-	//outb(CTRL_PORT, 0xF5);
-	//ack_cmd();
-	// enable mouse interrupts on processor 0
+	if (_wait_for_output_buffer() < 0)
+		return;
 
 	// enable the mouse to send packages
 	outb(0x64, 0xD4);
+	if (_wait_for_output_buffer() < 0)
+		return;
 	outb(0x60, 0xF4);
-	while (inb(0x60) != ACK);
-	while (inb(0x64) & 2);
+
+	if (_wait_for_ACK() < 0)
+		// failure on initialization
+		return;
+
+	if (_wait_for_output_buffer() < 0)
+		return;
+
+	outb(0x64, 0xD4);
+	if (_wait_for_output_buffer() < 0)
+		return;
+
+	// tell the mouse we want to set the sample rate
+	outb(0x60, 0xF3);
+	if (_wait_for_ACK() < 0 || _wait_for_output_buffer() < 0)
+		return;
+
+	outb(0x64, 0xD4);
+	if (_wait_for_output_buffer() < 0)
+		return;
+
+	outb(0x60, 40);
+	if (_wait_for_ACK() < 0)
+		return;
+
+	// bit 1 of status register (0x64) must be clear
+	// before writing to it, or to 0x60
+	if (_wait_for_output_buffer() < 0)
+		return;
+	// command 0x20 asks for the PS/2 Controller Configuration Byte
 	outb(0x64, 0x20);
-	while (!(inb(0x64) & DATA_IN_BUFFER));
+	if (_wait_for_data() < 0)
+		return;
+
 	unsigned char res = inb(0x60);
+	// we enable the PS/2 mouse interrupts
 	res |= 1 << 1;
+	// tell the controller we want to write the PS/2 Contr. Config. Byte
 	outb(0x64, 0x60);
-	while (inb(0x64) & 2);
+	if (_wait_for_output_buffer() < 0)
+		return;
+
 	outb(0x60, res);
 	initlock(&mouselock, "mouse");
 	initlock(&mouse_device_file_lock, "mouse");
@@ -87,6 +169,7 @@ void
 mouseintr(void)
 {
 	int count = 0;
+	// we wait for data coming from the mouse (inb(0x64) & 0x20)
 	while (!((inb(0x64) & DATA_IN_BUFFER) && (inb(0x64) & 0x20))) {
 		count++;
 		if (count == 1000)
@@ -118,7 +201,6 @@ mouseintr(void)
 	int y = (byte1 & 32) ? byte3 - 256 : byte3;
 	pos_x += x;
 	pos_y += y;
-	//cprintf("x: %d, y: %d\n", pos_x, pos_y);
 
 	if (byte1 & 1)
 		_add_event(MOUSE_LEFT_BUTTON, 0);
@@ -272,8 +354,6 @@ mouse_read(struct inode *ip, char *dst, int n)
 
 	return count;
 }
-
-
 
 int
 mouse_write(struct inode *ip, char *buf, int n)
