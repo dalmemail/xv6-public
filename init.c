@@ -12,6 +12,8 @@ main(void)
 {
   int pid, wpid;
 
+  mknod("mouse", 2, 1);
+
   if(open("console", O_RDWR) < 0){
     mknod("console", 1, 1);
     open("console", O_RDWR);

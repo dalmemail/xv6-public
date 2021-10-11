@@ -14,10 +14,17 @@
 #include "mmu.h"
 #include "proc.h"
 #include "x86.h"
+#include "mouse.h"
 
 static void consputc(int);
 
 static int panicked = 0;
+
+// position of the crt array
+static int mouse_cursor_pos = 0;
+// original color from the position where the cursor is now
+// (can be use to restore the original color when the cursor moves)
+static unsigned short old_mouse_cursor_pos_color = 0x0700;
 
 static struct {
   struct spinlock lock;
@@ -129,6 +136,19 @@ panic(char *s)
 static ushort *crt = (ushort*)P2V(0xb8000);  // CGA memory
 
 static void
+draw_mouse_cursor(void)
+{
+  old_mouse_cursor_pos_color = crt[mouse_cursor_pos] & 0xFF00;
+  crt[mouse_cursor_pos] = (crt[mouse_cursor_pos] & 0x00FF) | 0x7700;
+}
+
+static void
+remove_mouse_cursor(void)
+{
+  crt[mouse_cursor_pos] = (crt[mouse_cursor_pos] & 0x00FF) | old_mouse_cursor_pos_color;
+}
+
+static void
 cgaputc(int c)
 {
   int pos;
@@ -138,6 +158,8 @@ cgaputc(int c)
   pos = inb(CRTPORT+1) << 8;
   outb(CRTPORT, 15);
   pos |= inb(CRTPORT+1);
+
+  remove_mouse_cursor();
 
   if(c == '\n')
     pos += 80 - pos%80;
@@ -160,6 +182,9 @@ cgaputc(int c)
   outb(CRTPORT, 15);
   outb(CRTPORT+1, pos);
   crt[pos] = ' ' | 0x0700;
+
+  // we draw the cursor back
+  draw_mouse_cursor();
 }
 
 void
@@ -232,6 +257,54 @@ consoleintr(int (*getc)(void))
   }
 }
 
+// for simulating that the keyboard has sent a character
+// it returns the given character on odd calls and -1 (to
+// mark termination) on even calls
+static int
+_get_character(char c)
+{
+	static char count = 0;
+	count = 1 - count;
+	return (count) ? c : -1;
+}
+
+static int
+_get_newline(void)
+{
+	return _get_character('\n');
+}
+
+static int
+_get_backtrack(void)
+{
+	return _get_character('\b');
+}
+
+void
+cursorintr(void)
+{
+	mouse_state_t state = mouse_get_state();
+
+	if (state.n_events) {
+		for (int i = 0; i < state.n_events; i++) {
+			if (state.events[i].button == MOUSE_LEFT_BUTTON)
+				consoleintr(_get_newline);
+			else
+				consoleintr(_get_backtrack);
+		}
+	}
+
+	int x = state.x / 25;
+	int y = -state.y / 40;
+	x = (x < 0) ? 0 : x;
+	x = (x >= 80) ? 79 : x;
+	y = (y < 0) ? 0 : y;
+	y = (y >= 25) ? 24 : y;
+	remove_mouse_cursor();
+	mouse_cursor_pos = 80*y + x;
+	draw_mouse_cursor();
+}
+
 int
 consoleread(struct inode *ip, char *dst, int n)
 {
@@ -293,6 +366,8 @@ consoleinit(void)
   devsw[CONSOLE].write = consolewrite;
   devsw[CONSOLE].read = consoleread;
   cons.locking = 1;
+
+  draw_mouse_cursor();
 
   ioapicenable(IRQ_KBD, 0);
 }

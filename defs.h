@@ -20,6 +20,7 @@ void            bwrite(struct buf*);
 void            consoleinit(void);
 void            cprintf(char*, ...);
 void            consoleintr(int(*)(void));
+void		cursorintr(void);
 void            panic(char*) __attribute__((noreturn));
 
 // exec.c
@@ -185,6 +186,10 @@ void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+
+// mouse.c
+void		mouseinit(void);
+void		mouseintr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
