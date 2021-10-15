@@ -9,11 +9,7 @@
 #include "fs.h" // and this one
 #include "file.h"
 
-#define CTRL_PORT 0x64
-#define DATA_PORT 0x60
-
 #define DATA_IN_BUFFER 0x01
-//#define MOUSE_DATA
 
 #define ACK 0xFA
 
@@ -173,9 +169,6 @@ mouseintr(void)
 	while (!((inb(0x64) & DATA_IN_BUFFER) && (inb(0x64) & 0x20))) {
 		count++;
 		if (count == 1000)
-			// TODO: if we manage to read the first byte we should
-			// check if there is an event to handle, and use pos_x and pos_y
-			// as "estimated" values of x and y
 			// discard package
 			return;
 	}
